@@ -59,7 +59,7 @@ createIndex <- function(tbl, columnNames, unique = FALSE, indexName = NULL) {
                        as.character(dbplyr::remote_name(tbl)), 
                        paste(columnNames, collapse = ", "))
   
-  RSQLite::dbExecute(conn = dbplyr::remote_con(tbl), statement = statement)
+  DBI::dbExecute(conn = dbplyr::remote_con(tbl), statement = statement)
   invisible(tbl)
 }
 
@@ -96,15 +96,15 @@ listIndices <- function(tbl) {
   
   tableName <- as.character(dbplyr::remote_name(tbl))
   connection <- dbplyr::remote_con(tbl)
-  indices <- RSQLite::dbGetQuery(conn = connection, 
-                                 statement = sprintf("PRAGMA index_list('%s');", tableName)) %>%
+  indices <- DBI::dbGetQuery(conn = connection,
+                                statement = sprintf("PRAGMA show_indexes('%s');", tableName)) %>%
     dplyr::as_tibble()
   if (nrow(indices) == 0) {
     return(dplyr::tibble())
   }
   getIndexInfo <- function(indexName) {
-    indexInfo <- RSQLite::dbGetQuery(conn = connection, 
-                                     statement = sprintf("PRAGMA index_info('%s');", indexName)) %>%
+    indexInfo <- DBI::dbGetQuery(conn = connection,
+                                    statement = sprintf("PRAGMA index_info('%s');", indexName)) %>%
       dplyr::as_tibble()
     indexInfo$indexName <- indexName
     return(indexInfo)
@@ -163,13 +163,13 @@ removeIndex <- function(tbl, columnNames = NULL, indexName = NULL) {
   
   tableName <- as.character(dbplyr::remote_name(tbl))
   connection <- dbplyr::remote_con(tbl)
-  indices <- RSQLite::dbGetQuery(conn = connection, 
-                                 statement = sprintf("PRAGMA index_list('%s');", tableName))
+  indices <- DBI::dbGetQuery(conn = connection,
+                                statement = sprintf("PRAGMA show_indexes('%s');", tableName))
   
   if (is.null(indexName)) {
     for (indexName in indices$name) {
-      indexInfo <- RSQLite::dbGetQuery(conn = connection, 
-                                     statement = sprintf("PRAGMA index_info('%s');", indexName))
+      indexInfo <- DBI::dbGetQuery(conn = connection,
+                                      statement = sprintf("PRAGMA index_info('%s');", indexName))
       if (all(columnNames %in% indexInfo$name)) {
         indexName <- indexName
         break;
@@ -186,6 +186,6 @@ removeIndex <- function(tbl, columnNames = NULL, indexName = NULL) {
   
   statement <- sprintf("DROP INDEX %s;", indexName)
   
-  RSQLite::dbExecute(conn = dbplyr::remote_con(tbl), statement = statement)
+  DBI::dbExecute(conn = dbplyr::remote_con(tbl), statement = statement)
   invisible(tbl)
 }

@@ -223,24 +223,24 @@ appendToTable <- function(tbl, data) {
   connection <- dbplyr::remote_con(tbl)
   .checkAvailableSpace(connection)
   if (inherits(data, "data.frame")) {
-    
-    RSQLite::dbWriteTable(conn = connection,
-                          name = tableName,
-                          value = data,
-                          overwrite = FALSE,
-                          append = TRUE)
+
+    duckdb::dbWriteTable(conn = connection,
+                         name = tableName,
+                         value = data,
+                         overwrite = FALSE,
+                         append = TRUE)
   } else if (inherits(data, "tbl_dbi")) {
     if (isTRUE(all.equal(connection, dbplyr::remote_con(data)))) {
       sql <- dbplyr::sql_render(select(data, all_of(colnames(tbl))), connection)
       sql <- sprintf("INSERT INTO %s %s", tableName, sql)
-      RSQLite::dbExecute(connection, sql)
+      DBI::dbExecute(connection, sql)
     } else {
       doBatchedAppend <- function(batch) {
-        RSQLite::dbWriteTable(conn = connection,
-                              name = tableName,
-                              value = batch,
-                              overwrite = FALSE,
-                              append = TRUE)
+        duckdb::dbWriteTable(conn = connection,
+                             name = tableName,
+                             value = batch,
+                             overwrite = FALSE,
+                             append = TRUE)
       }
       batchApply(data, doBatchedAppend)
     }

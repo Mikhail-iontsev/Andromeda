@@ -37,17 +37,17 @@
 #' 
 #' @section Inheritance:
 #' 
-#' The `Andromeda` inherits directly from `SQLiteConnection.` As such, it can be used as if it is a `SQLiteConnection`. 
-#' `RSQLite` is an R wrapper around 'SQLite', a low-weight but very powerful single-user SQL database that can run 
+#' The `Andromeda` inherits directly from `duckdb_connection.` As such, it can be used as if it is a `duckdb_connection`.
+#' `DBI` is an R wrapper around 'SQLite', a low-weight but very powerful single-user SQL database that can run
 #' from a single file on the local file system.
 #' 
 #' @name Andromeda-class
 #' @aliases Andromeda
 #' @seealso [`andromeda()`]
-#' @import RSQLite
+#' @import DBI
 #' @importClassesFrom DBI DBIObject DBIConnection
 #' @export
-setClass("Andromeda", contains = "SQLiteConnection")
+setClass("Andromeda", contains = "duckdb_connection")
 
 #' Create an Andromeda object
 #'
@@ -123,14 +123,14 @@ andromeda <- function(...) {
 copyAndromeda <- function(andromeda) {
   checkIfValid(andromeda)
   newAndromeda <- .createAndromeda()
-  RSQLite::sqliteCopyDatabase(andromeda, newAndromeda)
+  DBI::sqliteCopyDatabase(andromeda, newAndromeda)
   return(newAndromeda)
 }
 
 .createAndromeda <- function() {
   tempFolder <- .getAndromedaTempFolder()
-  andromeda <- RSQLite::dbConnect(RSQLite::SQLite(),
-                                  tempfile(tmpdir = tempFolder, fileext = ".sqlite"),
+  andromeda <- duckdb::dbConnect(duckdb::duckdb(),
+                                  tempfile(tmpdir = tempFolder, fileext = ".duckdb"),
                                   extended_types = TRUE)
   class(andromeda) <- "Andromeda"
   attr(class(andromeda),"package") <- "Andromeda"
@@ -139,9 +139,7 @@ copyAndromeda <- function(andromeda) {
     missing(ptr)
     close(andromeda)
   }
-  reg.finalizer(andromeda@ptr, finalizer, onexit = TRUE)
-  RSQLite::dbExecute(andromeda, "PRAGMA journal_mode = OFF") 
-  RSQLite::dbExecute(andromeda, sprintf("PRAGMA temp_store_directory = '%s'", tempFolder)) 
+  reg.finalizer(andromeda@conn_ref, finalizer, onexit = TRUE)
   return(andromeda)
 }
 
@@ -165,15 +163,15 @@ copyAndromeda <- function(andromeda) {
 setMethod("show", "Andromeda", function(object) {
   cli::cat_line(pillar::style_subtle("# Andromeda object"))
 
-  if (RSQLite::dbIsValid(object)) {
-    cli::cat_line(pillar::style_subtle(paste("# Physical location: ", object@dbname)))
+  if (duckdb::dbIsValid(object)) {
+    cli::cat_line(pillar::style_subtle(paste("# Physical location: ", object@driver@dbdir)))
     cli::cat_line("")
     cli::cat_line("Tables:")
-    for (name in RSQLite::dbListTables(object)) {
+    for (name in DBI::dbListTables(object)) {
       cli::cat_line(paste0("$",
                            name,
                            " (",
-                           paste(RSQLite::dbListFields(object, name), collapse = ", "),
+                           paste(DBI::dbListFields(object, name), collapse = ", "),
                            ")"))
     }
   } else {
@@ -213,44 +211,44 @@ setMethod("[[<-", "Andromeda", function(x, i, value) {
   checkIfValid(x)
   if (is.null(value)) {
     if (i %in% names(x)) {
-      RSQLite::dbRemoveTable(x, i)
+      DBI::dbRemoveTable(x, i)
     }
   } else if (inherits(value, "data.frame")) {
     .checkAvailableSpace(x)
-    RSQLite::dbWriteTable(conn = x, name = i, value = value, overwrite = TRUE, append = FALSE)
+    DBI::dbWriteTable(conn = x, name = i, value = value, overwrite = TRUE, append = FALSE)
   } else if (inherits(value, "tbl_dbi")) {
     .checkAvailableSpace(x)
-    if (isTRUE(all.equal(x, dbplyr::remote_con(value)))) {
+    remote_connection <- dbplyr::remote_con(value)
+    if (inherits(remote_connection, class(x))) {
       sql <- dbplyr::sql_render(value, x)
-      if (RSQLite::dbExistsTable(x, i)) {
-        # Maybe we're copying data from a table into the same table. So write to temp
-        # table first, then drop old table, and rename temp to old name:
+      if (DBI::dbExistsTable(x, i)) {
         tempName <- paste(sample(letters, 16), collapse = "")
         sql <- sprintf("CREATE TABLE %s AS %s", tempName, sql)
-        RSQLite::dbExecute(x, sql)
-        RSQLite::dbRemoveTable(x, i)
+        DBI::dbExecute(x, sql)
+        DBI::dbRemoveTable(x, i)
         sql <- sprintf("ALTER TABLE %s RENAME TO %s;", tempName, i)
-        RSQLite::dbExecute(x, sql)
+        DBI::dbExecute(x, sql)
       } else {
         sql <- sprintf("CREATE TABLE %s AS %s", i, sql)
-        RSQLite::dbExecute(x, sql)
+        DBI::dbExecute(x, sql)
       }
     } else {
-      if (RSQLite::dbExistsTable(x, i)) {
-        RSQLite::dbRemoveTable(x, i)
+      if (DBI::dbExistsTable(x, i)) {
+        DBI::dbRemoveTable(x, i)
       }
       doBatchedAppend <- function(batch) {
-        RSQLite::dbWriteTable(conn = x, name = i, value = batch, overwrite = FALSE, append = TRUE)
+        DBI::dbWriteTable(conn = x, name = i, value = batch, overwrite = FALSE, append = TRUE)
         return(TRUE)
       }
       dummy <- batchApply(value, doBatchedAppend)
       if (length(dummy) == 0) {
-        RSQLite::dbWriteTable(conn = x, name = i, value = dplyr::collect(value), overwrite = FALSE, append = TRUE)
+        DBI::dbWriteTable(conn = x, name = i, value = dplyr::collect(value), overwrite = FALSE, append = TRUE)
       }
     }
   } else {
     abort("Table must be a data frame or dplyr table")
   }
+
   x
 })
 
@@ -261,7 +259,7 @@ setMethod("[[<-", "Andromeda", function(x, i, value) {
 #' Andromeda-class
 setMethod("[[", "Andromeda", function(x, i) {
   checkIfValid(x)
-  if (RSQLite::dbExistsTable(x, i)) {
+  if (DBI::dbExistsTable(x, i)) {
     return(dplyr::tbl(x, i))
   } else {
     return(NULL)
@@ -289,10 +287,9 @@ setMethod("[[", "Andromeda", function(x, i) {
 #' @rdname
 #' Andromeda-class
 #' 
-#' @export
 setMethod("names", "Andromeda", function(x) {
   checkIfValid(x)
-  RSQLite::dbListTables(x)
+  DBI::dbListTables(x)
 })
 
 #' Set table names in an Andromeda object
@@ -429,7 +426,7 @@ isAndromeda <- function(x) {
 #' @export
 isValidAndromeda <- function(x) {
   if(!isAndromeda(x)) rlang::abort(paste(deparse(substitute(x)), "is not an Andromeda object."))
-  return(RSQLite::dbIsValid(x))
+  return(duckdb::dbIsValid(x))
 }
 
 #' @param con    An [`Andromeda`] object.
@@ -438,9 +435,9 @@ isValidAndromeda <- function(x) {
 #' @rdname
 #' Andromeda-class
 setMethod("close", "Andromeda", function(con, ...) {
-  fileName <- con@dbname
-  if (RSQLite::dbIsValid(con)) {
-    RSQLite::dbDisconnect(con)
+  fileName <- con@driver@dbdir
+  if (duckdb::dbIsValid(con)) {
+    duckdb::dbDisconnect(con)
   }
   if (file.exists(fileName)) {
     unlink(fileName)
